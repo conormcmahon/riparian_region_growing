@@ -5,9 +5,9 @@
 template <typename DEMType, typename VegType>
 RiparianGrower<DEMType, VegType>::RiparianGrower():
     channel_name_(""),
-    channel_name_attribute_index_(0),
+    channel_name_attribute_index_(-1),
     channel_order_(0),
-    channel_order_attribute_index_(0)
+    channel_order_attribute_index_(-1)
 {
     GDALAllRegister();
     dem_cloud_.reset(new GC());
@@ -184,20 +184,24 @@ void RiparianGrower<DEMType, VegType>::extractVegetationStatistics(std::string o
     float mean_channel_height = 0;
     for( auto& flowline_segment: flowlines_layer_ )
     {
+        // Skip features which don't match user-specified attribute filters
+        if(channel_name_attribute_index_ > -1)
+            if(channel_name_.compare(((*flowline_segment)[channel_name_attribute_index_]).GetAsString()) != 0)
+                continue;
+        if(channel_order_attribute_index_ > -1)
+            if(((*flowline_segment)[channel_order_attribute_index_]).GetInteger() < channel_order_)
+                continue;
+
         num_segments++;
         int current_points = 0;
-        //OGRFeature *poFeature;
         OGRPoint ptTemp;
 
-        //poFeature = flowlines_layer_->GetNextFeature();
         OGRGeometry *poGeometry;
-        poGeometry = flowline_segment->GetGeometryRef(); //poFeature->GetGeometryRef();
+        poGeometry = flowline_segment->GetGeometryRef(); 
         
         OGRLineString *poLineString = ( OGRLineString * )poGeometry;
-        //Polyline.LinesOfFeature.resize(1);
         int NumberOfVertices = poLineString ->getNumPoints();
         LineSegment pcl_segment;
-        //Polyline.LinesOfFeature.at(0).LineString.resize(NumberOfVertices);
         for ( int k = 0; k < NumberOfVertices; k++ )
         {
             poLineString->getPoint(k,&ptTemp);
@@ -216,10 +220,8 @@ void RiparianGrower<DEMType, VegType>::extractVegetationStatistics(std::string o
             
             if(pt_veg.z < 10e5 && pt_veg.z > -100)
                 mean_channel_height += pt_veg.z;
-            //Polyline.LinesOfFeature.at(0).LineString.at(k) = pt;
             current_points++;
         }
-        //LineLayer.push_back(Polyline);
 
         total_points += current_points;
         if(largest_segment < current_points)
