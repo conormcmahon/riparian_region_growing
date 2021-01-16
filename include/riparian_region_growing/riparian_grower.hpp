@@ -2,12 +2,15 @@
 #include "riparian_region_growing/riparian_grower.h"
 
 // Constructor 
-template <typename DEMType, typename VegType>
-RiparianGrower<DEMType, VegType>::RiparianGrower():
+template <typename DEMType, typename VegType, typename ChannelType>
+RiparianGrower<DEMType, VegType, ChannelType>::RiparianGrower():
     channel_name_(""),
     channel_name_attribute_index_(-1),
     channel_order_(0),
-    channel_order_attribute_index_(-1)
+    channel_order_attribute_index_(-1),
+    search_distance_(5.0),
+    neighbor_count_(5),
+    search_by_distance_(true)
 {
     GDALAllRegister();
     dem_cloud_.reset(new GC());
@@ -17,15 +20,15 @@ RiparianGrower<DEMType, VegType>::RiparianGrower():
 }
 
 // Destructor - Release GDAL Databases
-template <typename DEMType, typename VegType>
-RiparianGrower<DEMType, VegType>::~RiparianGrower()
+template <typename DEMType, typename VegType, typename ChannelType>
+RiparianGrower<DEMType, VegType, ChannelType>::~RiparianGrower()
 {
     GDALClose( flowlines_dataset_ );
 }
 
 // Read Channel Network from NHDPlus .shpfile format
-template <typename DEMType, typename VegType>
-void RiparianGrower<DEMType, VegType>::readChannelNetworkNHDPlus(std::string filename, std::string layer_name)
+template <typename DEMType, typename VegType, typename ChannelType>
+void RiparianGrower<DEMType, VegType, ChannelType>::readChannelNetworkNHDPlus(std::string filename, std::string layer_name)
 {
     std::cout << " Attempting to read channel network from .shpfile at " << filename << std::endl;
     // Load Dataset from .shpfile
@@ -68,8 +71,8 @@ void RiparianGrower<DEMType, VegType>::readChannelNetworkNHDPlus(std::string fil
 //  - curvature
 //  - height_difference_avg (average height distance to k neightbors)
 //  - norm_diff_avg (average angular normal direction deviation from k neightbors)
-template <typename DEMType, typename VegType>
-bool RiparianGrower<DEMType, VegType>::readDEMPCD(std::string filename)
+template <typename DEMType, typename VegType, typename ChannelType>
+bool RiparianGrower<DEMType, VegType, ChannelType>::readDEMPCD(std::string filename)
 {
     std::cout << "Reading an input DEM cloud from file " << filename << std::endl;
     if (pcl::io::loadPCDFile<DEMType> (filename, *dem_cloud_) == -1) 
@@ -80,6 +83,10 @@ bool RiparianGrower<DEMType, VegType>::readDEMPCD(std::string filename)
     std::cout << "  Successfully read DEM cloud with size " << dem_cloud_->points.size() << std::endl;
     // Build KD Search Tree on cloud
     dem_tree_->setInputCloud(dem_cloud_);
+    // Get maps between DEM cloud indices and point ids (from original cloud)
+    dem_cloud_index_map_.clear();
+    for(int i=0; i<dem_cloud_->points.size(); i++)
+        dem_cloud_index_map_.push_back(dem_cloud_->points[i].index);
     return true;
 }
 
@@ -88,8 +95,8 @@ bool RiparianGrower<DEMType, VegType>::readDEMPCD(std::string filename)
 //  - Height (over local DEM height)
 //  - Intensity (of LiDAR return)
 //  - Roughness (measure of local height variability)
-template <typename DEMType, typename VegType>
-bool RiparianGrower<DEMType, VegType>::readVegCloudPCD(std::string filename)
+template <typename DEMType, typename VegType, typename ChannelType>
+bool RiparianGrower<DEMType, VegType, ChannelType>::readVegCloudPCD(std::string filename)
 {
     std::cout << "Reading an input vegetation cloud from file " << filename << std::endl;
     if (pcl::io::loadPCDFile<VegType> (filename, *veg_cloud_) == -1) 
@@ -100,22 +107,24 @@ bool RiparianGrower<DEMType, VegType>::readVegCloudPCD(std::string filename)
     std::cout << "  Successfully read vegetation cloud with size " << veg_cloud_->points.size() << std::endl;
     // Build KD Search Tree on cloud
     veg_tree_->setInputCloud(veg_cloud_);
+    for(int i=0; i<veg_cloud_->points.size(); i++)
+        veg_cloud_index_map_.push_back(veg_cloud_->points[i].index);
     return true;
 }
 
 
 
 // Get Ground TIN from DEM
-template <typename DEMType, typename VegType>
-void RiparianGrower<DEMType, VegType>::generateGroundTIN()
+template <typename DEMType, typename VegType, typename ChannelType>
+void RiparianGrower<DEMType, VegType, ChannelType>::generateGroundTIN()
 {
     TIN_.setInputCloud(dem_cloud_, dem_tree_);
     TIN_.generateTIN();
 }
 
 
-template <typename DEMType, typename VegType>
-void RiparianGrower<DEMType, VegType>::filterByChannelName(std::string channel_name, std::string attribute_name)
+template <typename DEMType, typename VegType, typename ChannelType>
+void RiparianGrower<DEMType, VegType, ChannelType>::filterByChannelName(std::string channel_name, std::string attribute_name)
 {
     std::cout << "Adding request to filter by channel name " << channel_name << std::endl;
     channel_name_ = channel_name;
@@ -135,8 +144,8 @@ void RiparianGrower<DEMType, VegType>::filterByChannelName(std::string channel_n
         std::cout << "  WARNING: requested attribute field name (" << attribute_name << ") was not found, so no channel name filter will be applied." << std::endl;
 }
 
-template <typename DEMType, typename VegType>
-void RiparianGrower<DEMType, VegType>::filterByChannelOrder(int channel_order, std::string attribute_name)
+template <typename DEMType, typename VegType, typename ChannelType>
+void RiparianGrower<DEMType, VegType, ChannelType>::filterByChannelOrder(int channel_order, std::string attribute_name)
 {
     std::cout << "Adding request to filter to disclude channels of order lower than " << channel_order << std::endl;
     channel_order_ = channel_order;   
@@ -156,10 +165,23 @@ void RiparianGrower<DEMType, VegType>::filterByChannelOrder(int channel_order, s
         std::cout << "  WARNING: requested attribute field name (" << attribute_name << ") was not found, so no channel order filter will be applied." << std::endl;
 }
 
+// This updates the region growing search distance, and compells the growing to function based on a distance search on each pass
+template <typename DEMType, typename VegType, typename ChannelType>
+void RiparianGrower<DEMType, VegType, ChannelType>::setNeighborSearchDistance(float search_distance)
+{
+    search_distance_ = search_distance;
+    search_by_distance_ = true;
+}
+// This updates the region growing neighbor search count, and compells the growing to find a fixed number of neighbors on each pass
+template <typename DEMType, typename VegType, typename ChannelType>
+void RiparianGrower<DEMType, VegType, ChannelType>::setNeighborSearchCount(int neighbor_count)
+{
+    neighbor_count_ = neighbor_count;
+    search_by_distance_ = false;
+}
 
-
-template <typename DEMType, typename VegType>
-void RiparianGrower<DEMType, VegType>::extractVegetationStatistics(std::string output_filename)
+template <typename DEMType, typename VegType, typename ChannelType>
+void RiparianGrower<DEMType, VegType, ChannelType>::extractVegetationStatistics(std::string output_filename)
 {
     std::cout << "Beginning to extract vegetation statistics around stream flowlines." << std::endl;
     OGRGeometry *flowline_geometry;
@@ -172,7 +194,8 @@ void RiparianGrower<DEMType, VegType>::extractVegetationStatistics(std::string o
         std::cout << "  Something is wrong with the geometry of the input file. Returning without performing analysis." << std::endl;
         return;
     }
-    VC test_cloud;
+
+    CC channel_network_cloud;
 
     flowlines_layer_->ResetReading();       
     OGRFeature *flowline_segment; 
@@ -182,45 +205,55 @@ void RiparianGrower<DEMType, VegType>::extractVegetationStatistics(std::string o
     int largest_segment = 0;
     int smallest_segment = 1e8;
     float mean_channel_height = 0;
-    for( auto& flowline_segment: flowlines_layer_ )
+    for( auto& input_segment: flowlines_layer_ )
     {
         // Skip features which don't match user-specified attribute filters
         if(channel_name_attribute_index_ > -1)
-            if(channel_name_.compare(((*flowline_segment)[channel_name_attribute_index_]).GetAsString()) != 0)
+            if(channel_name_.compare(((*input_segment)[channel_name_attribute_index_]).GetAsString()) != 0)
                 continue;
         if(channel_order_attribute_index_ > -1)
-            if(((*flowline_segment)[channel_order_attribute_index_]).GetInteger() < channel_order_)
+            if(((*input_segment)[channel_order_attribute_index_]).GetInteger() < channel_order_)
                 continue;
 
         num_segments++;
         int current_points = 0;
         OGRPoint ptTemp;
 
-        OGRGeometry *poGeometry;
-        poGeometry = flowline_segment->GetGeometryRef(); 
-        
-        OGRLineString *poLineString = ( OGRLineString * )poGeometry;
-        int NumberOfVertices = poLineString ->getNumPoints();
-        LineSegment pcl_segment;
+        // Get Geometry
+        OGRGeometry *input_geometry;
+        input_geometry = input_segment->GetGeometryRef(); 
+        // Reformat Geometry and get Point Count 
+        OGRLineString *input_geometry_string = ( OGRLineString * )input_geometry;
+        int NumberOfVertices = input_geometry_string ->getNumPoints();
+        // Iterate over all points in segment, generate new data structures in memory
+        LineSegment channel_segment;
         for ( int k = 0; k < NumberOfVertices; k++ )
         {
-            poLineString->getPoint(k,&ptTemp);
+            input_geometry_string->getPoint(k,&ptTemp);
             DEMType pt_grd;
             pt_grd.x = ptTemp.getX();
             pt_grd.y = ptTemp.getY();
             pt_grd.z = 0;
-            pcl_segment.geometry_gc.points.push_back(pt_grd);
-            VegType pt_veg;
-            pt_veg.x = ptTemp.getX();
-            pt_veg.y = ptTemp.getY();
-            pt_veg.z = 0;
-            pt_veg.z = pt_veg.z = 0-getChannelElevation(pt_grd);
-            pcl_segment.geometry_vc.points.push_back(pt_veg); 
-            test_cloud.points.push_back(pt_veg);
+            channel_segment.geometry_gc.points.push_back(pt_grd);
+            ChannelType pt_channel;
+            pt_channel.x = ptTemp.getX();
+            pt_channel.y = ptTemp.getY();
+            pt_channel.z = 0;
+            pt_channel.z = pt_channel.z = 0-getChannelElevation(pt_grd);
+            channel_segment.geometry_cc.points.push_back(pt_channel); 
             
-            if(pt_veg.z < 10e5 && pt_veg.z > -100)
-                mean_channel_height += pt_veg.z;
+            
+            if(pt_channel.z < 10e5 && pt_channel.z > -100)
+                mean_channel_height += pt_channel.z;
             current_points++;
+        }
+        // Run some geometric analysis on segment
+        getSegmentDirection(channel_segment);
+        for(int i=0; i<channel_segment.geometry_cc.points.size(); i++)
+        {
+            std::vector<int> index_list;
+            regionGrowingVeg(channel_segment.geometry_cc.points[i], index_list);
+            channel_network_cloud.push_back(channel_segment.geometry_cc.points[i]);
         }
 
         total_points += current_points;
@@ -236,118 +269,207 @@ void RiparianGrower<DEMType, VegType>::extractVegetationStatistics(std::string o
     std::cout << "  Average point elevation was " << mean_channel_height << "ft." << std::endl;
 
     pcl::PCDWriter writer;
-    writer.write<VegType>("/mnt/d/serdp/data/pendleton/LiDAR/hydrology/raw_point_clouds/output/rip_height.pcd", test_cloud, true);
+    writer.write<ChannelType>("/mnt/d/serdp/data/pendleton/LiDAR/hydrology/raw_point_clouds/output/rip_height.pcd", channel_network_cloud, true);
 }
 
 
 
 // Get local channel height based on DEM
-template <typename DEMType, typename VegType>
-float RiparianGrower<DEMType, VegType>::getChannelElevation(DEMType point)
+template <typename DEMType, typename VegType, typename ChannelType>
+float RiparianGrower<DEMType, VegType, ChannelType>::getChannelElevation(DEMType point)
 {
     return TIN_.getPointHeight(dem_cloud_, point);
 }
 
 
-// *** Read Channel Network ***
-// Takes input flowline information (e.g. from NHDPlus) from a shapefile
-void readChannelNetwork(std::string filename, float raster_object)
+
+template <typename DEMType, typename VegType, typename ChannelType>
+void RiparianGrower<DEMType, VegType, ChannelType>::getSegmentDirection(LineSegment &segment)
 {
-    // Register GDAL Drivers
-    GDALAllRegister();
-
-    GDALDataset *flowlines_dataset;
-    flowlines_dataset = (GDALDataset*) GDALOpenEx(filename.c_str(), GDAL_OF_VECTOR, NULL, NULL, NULL);
-    if(flowlines_dataset == NULL)
+    // Iterating over points in the segment
+    for(int i=0; i<segment.geometry_cc.points.size(); i++)
     {
-        printf("ERROR: GDAL Shapefile Open Failed.");
-        exit(1);
+        Eigen::Vector2f point_1;
+        Eigen::Vector2f point_2;
+        Eigen::Vector2f flow;
+        // For the first point, compare it to the next point
+        if(i == 0)
+        {
+            point_1 << segment.geometry_cc.points[i].x, segment.geometry_cc.points[i].y;
+            point_2 << segment.geometry_cc.points[i+1].x, segment.geometry_cc.points[i+1].y;
+            segment.geometry_cc.points[i].fore_swath_dist = (point_2 - point_1).norm();
+            segment.geometry_cc.points[i].rear_swath_dist = 0;
+        }
+        // For the last point, compare it to the previous point
+        else if(i == segment.geometry_cc.points.size()-1)
+        {
+            point_1 << segment.geometry_cc.points[i-1].x, segment.geometry_cc.points[i-1].y;
+            point_2 << segment.geometry_cc.points[i].x, segment.geometry_cc.points[i].y;
+            segment.geometry_cc.points[i].fore_swath_dist = 0;
+            segment.geometry_cc.points[i].rear_swath_dist = (point_2 - point_1).norm();
+        }
+        // For other points, compare the previous and next point
+        else
+        {
+            point_1 << segment.geometry_cc.points[i-1].x, segment.geometry_cc.points[i-1].y;
+            point_2 << segment.geometry_cc.points[i+1].x, segment.geometry_cc.points[i+1].y;
+            Eigen::Vector2f point_mid;
+            point_mid << segment.geometry_cc.points[i].x, segment.geometry_cc.points[i].y;
+            segment.geometry_cc.points[i].fore_swath_dist = (point_2 - point_mid).norm();
+            segment.geometry_cc.points[i].rear_swath_dist = (point_mid - point_1).norm();
+        }
+        // Flow as an XY vector
+        flow = point_2 - point_1;
+        // Flow as the cartesian angle of this vector
+        segment.geometry_cc.points[i].flow_direction = atan2(flow[1], flow[0]);
+        segment.geometry_cc.points[i].normal_direction = atan2(flow[1], flow[0]) + M_PI/2;
+        segment.geometry_cc.points[i].normal_direction = std::fmod(segment.geometry_cc.points[i].flow_direction, float(M_PI));
     }
+}
+
+
+template <typename DEMType, typename VegType, typename ChannelType>
+void RiparianGrower<DEMType, VegType, ChannelType>::getPerpendicularSwath(LineSegment &segment)
+{
+    for(int i=0; segment.geometry_cc.points.size(); i++)
+    {
+        
+    }
+}
+
+template <typename DEMType, typename VegType, typename ChannelType>
+void RiparianGrower<DEMType, VegType, ChannelType>::regionGrowingVeg(ChannelType &point, std::vector<int> &index_list)
+{
+    VegType point_veg;
+    point_veg.x = point.x;
+    point_veg.y = point.y;
+    point_veg.z = point.z;
+    std::cout << "Starting a new search for veg neighbors of point: " << point.x << " " << point.y << std::setprecision(8) << std::endl;
+
+    // Get the nearest seed points proceed from here
+    std::vector<int> nearest_indices;
+    std::vector<float> dist_squareds;
+    veg_tree_->nearestKSearch(point_veg, 1, nearest_indices, dist_squareds);
+    std::cout << nearest_indices.size() << " " << nearest_indices[0] << std::endl;
+    regionGrowingRecursorVeg(point, veg_cloud_->points[nearest_indices[0]], nearest_indices[0], index_list);
+    std::cout << "made it out of there... " << index_list.size() << std::endl;
+
+    // Once you get back to the top level, do some kind of stats over points? 
+    std::vector<float> veg_height;
+    for(int i=0; i<index_list.size(); i++)
+    {
+        veg_height.push_back(veg_cloud_->points[index_list[i]].height);
+    }
+    std::sort(veg_height.begin(), veg_height.end());
     
-    OGRLayer *flowlines;
-    flowlines = flowlines_dataset->GetLayerByName("flowlines_vaa_ca");
-
-    OGRFeature *flowline_segment_counter;
-    int num_segments = 0;
-    for( auto& flowline_segment_counter: flowlines )
+    if(veg_height.size() == 0)
     {
-        num_segments++;
+        point.vegetation_height_100th = 0;
+        point.vegetation_height_75th = 0;
+        point.vegetation_height_50th = 0;
+        point.vegetation_density = 0;
     }
-    std::cout << "total number of segments: " << num_segments << std::endl;
-
-    flowlines->ResetReading(); 
-    OGRFeature *first_segment;
-    first_segment = flowlines->GetNextFeature();
-
-    OGRField *flowline_field;
-    for( auto&& flowline_field: *first_segment )
-    { 
-        std::cout << flowline_field.GetName() << " " << flowline_field.GetAsString() << std::endl;
-    }
-
-    OGREnvelope envelope;
-    flowlines->GetExtent(&envelope, true);
-
-    flowlines->ResetReading();
-
-    OGRGeometry *flowline_geometry;
-    flowline_geometry = first_segment->GetGeometryRef();
-
-
-    OGRFeature *flowline_segment;
-    if( flowline_geometry != NULL
-        && wkbFlatten(flowline_geometry->getGeometryType()) == wkbLineString )
+    else
     {
-        std::cout << "Got in here!" << std::endl;
-        OGRFeature *poFeature;
-        OGRPoint ptTemp;
-
-        poFeature = flowlines ->GetNextFeature();
-        OGRGeometry *poGeometry;
-        poGeometry = poFeature ->GetGeometryRef();
-        if ( poGeometry != NULL && wkbFlatten ( poGeometry ->getGeometryType() ) == wkbLineString  )
-        {
-            OGRLineString *poLineString = ( OGRLineString * )poGeometry;
-            //Polyline.LinesOfFeature.resize(1);
-            int NumberOfVertices = poLineString ->getNumPoints();
-            //Polyline.LinesOfFeature.at(0).LineString.resize(NumberOfVertices);
-            for ( int k = 0; k < NumberOfVertices; k++ )
-            {
-                poLineString ->getPoint(k,&ptTemp);
-                pcl::PointXYZ pt;
-                pt.x = ptTemp.getX();
-                pt.y = ptTemp.getY();
-                std::cout << pt.x << " " << pt.y << std::endl;
-                //Polyline.LinesOfFeature.at(0).LineString.at(k) = pt;
-            }
-            //LineLayer.push_back(Polyline);
-        }
-        else if ( poGeometry != NULL && wkbFlatten ( poGeometry ->getGeometryType() ) == wkbMultiLineString )
-        {
-            OGRMultiLineString *poMultiLineString = ( OGRMultiLineString * )poGeometry;
-            int NumberOfGeometries = poMultiLineString ->getNumGeometries();
-            //Polyline.LinesOfFeature.resize(NumberOfGeometries);
-            for ( int j = 0; j < NumberOfGeometries; j++ )
-            {
-                OGRGeometry *poLineGeometry = poMultiLineString ->getGeometryRef(j);
-                OGRLineString *poLineString = ( OGRLineString * )poLineGeometry;
-                int NumberOfVertices = poLineString ->getNumPoints();
-                //Polyline.LinesOfFeature.at(j).LineString.resize(NumberOfVertices);
-                for ( int k = 0; k < NumberOfVertices; k++ )
-                {
-                    poLineString ->getPoint(k,&ptTemp);
-                    pcl::PointXYZ pt;
-                    pt.x = ptTemp.getX();
-                    pt.y = ptTemp.getY();
-                    std::cout << pt.x << " " << pt.y << " although, else " << std::endl;
-                    //Polyline.LinesOfFeature.at(j).LineString.at(k) = pt;
-                }
-            }
-            //LineLayer.push_back(Polyline);
-        }
+        point.vegetation_height_100th = veg_height[veg_height.size()-1];
+        point.vegetation_height_75th = veg_height[veg_height.size()/4*3];
+        point.vegetation_height_50th = veg_height[veg_height.size()/2];
+        point.vegetation_density = veg_height.size();
     }
 
-    std::cout << "fish!" << std::endl;
+    std::cout << "  Finished finding subpoints for the above. Stats: " << point.vegetation_height_100th << " " << point.vegetation_height_75th << " " << point.vegetation_height_50th << " " << point.vegetation_density << std::endl;
+}
 
-    GDALClose( flowlines_dataset );
+template <typename DEMType, typename VegType, typename ChannelType>
+void RiparianGrower<DEMType, VegType, ChannelType>::regionGrowingRecursorVeg(ChannelType &point, VegType new_point, int new_ind, std::vector<int> &index_list)
+{
+    // Check whether new point is already in the region
+    bool already_included = false;
+    for(int i=0; i<index_list.size(); i++)
+        if(index_list[i] == new_ind)
+        {
+            already_included = true;
+            return;
+        }
+    // Check if new point is a good candidate to be added to region
+    if(growingConditionVeg(point, new_point))
+    {
+        // Add new point to list
+        index_list.push_back(new_ind);
+        // Get New Candidate Points
+        std::vector<int> nearest_indices;
+        std::vector<float> dist_squareds;
+        if(search_by_distance_)
+            veg_tree_->radiusSearch(new_point, search_distance_, nearest_indices, dist_squareds);
+        else
+            veg_tree_->nearestKSearch(new_point, neighbor_count_, nearest_indices, dist_squareds);
+        for(int i=0; i<nearest_indices.size(); i++)
+            regionGrowingRecursorVeg(point, veg_cloud_->points[nearest_indices[i]], nearest_indices[i], index_list);
+    }
+
+    return;
+}
+
+template <typename DEMType, typename VegType, typename ChannelType>
+bool RiparianGrower<DEMType, VegType, ChannelType>::growingConditionVeg(ChannelType point, VegType point_new)
+{
+    // For now, threshold not to include points further than 50 ft
+    if(point2DDistance(point, point_new) > 50)
+        return false;
+    // Check return number? 
+    // Check height?
+    // Check local structure of crown?
+    // Check ground height over source stream point
+    // Check location relative to swath 
+    float distance_along_channel = pointDistanceAlongVector(point, point_new, angleFromAzimuth(point.flow_direction));
+    if(distance_along_channel > point.fore_swath_dist*1.5 || distance_along_channel < -point.rear_swath_dist*1.5)
+        return false;
+    return true;
+}
+
+
+template <typename DEMType, typename VegType, typename ChannelType>
+void RiparianGrower<DEMType, VegType, ChannelType>::getSwathPointIndices(LineSegment &segment)
+{
+
+}
+
+// Get 2D (XY) distance between two points of arbitrary PCL type
+template <typename DEMType, typename VegType, typename ChannelType>
+template <typename FirstType, typename SecondType>
+float RiparianGrower<DEMType, VegType, ChannelType>::point2DDistance(FirstType point_1, SecondType point_2)
+{
+    return sqrt(pow(point_1.x-point_2.x,2) + pow(point_1.y-point_2.y,2));
+}
+
+// Get 3D (XYZ) distance between two points of arbitrary PCL type
+template <typename DEMType, typename VegType, typename ChannelType>
+template <typename FirstType, typename SecondType>
+float RiparianGrower<DEMType, VegType, ChannelType>::point3DDistance(FirstType point_1, SecondType point_2)
+{
+    return sqrt(pow(point_1.x-point_2.x,2) + pow(point_1.y-point_2.y,2) + pow(point_1.z-point_2.z,2));
+}
+
+// Get distance between two points along a particular 3D vector
+template <typename DEMType, typename VegType, typename ChannelType>
+template <typename FirstType, typename SecondType>
+float RiparianGrower<DEMType, VegType, ChannelType>::pointDistanceAlongVector(FirstType point_1, SecondType point_2, Eigen::Vector3f vec)
+{ 
+    Eigen::Vector3f point_1_eig;
+    Eigen::Vector3f point_2_eig;
+    point_1_eig << point_1.x, point_1.y, point_1.z;
+    point_2_eig << point_2.x, point_2.y, point_2.z;
+
+    Eigen::Vector3f distance = point_2_eig - point_1_eig;
+
+    return distance.dot(vec)/vec.norm();
+}
+
+// Get Eigen::Vector3f unit vector in XY plane based on cartesian angle input
+template <typename DEMType, typename VegType, typename ChannelType>
+Eigen::Vector3f RiparianGrower<DEMType, VegType, ChannelType>::angleFromAzimuth(float angle)
+{ 
+    Eigen::Vector3f vec;
+    vec << cos(angle), sin(angle), 0;
+    return vec;
 }

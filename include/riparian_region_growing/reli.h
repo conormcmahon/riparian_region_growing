@@ -11,7 +11,15 @@ namespace pcl{
 struct RELI
   {
     PCL_ADD_POINT4D                     // Macro quad-word XYZ
-    float histogram[];                  /* Data contained by index:
+    float flow_direction;
+    float normal_direction;
+    float fore_swath_dist;
+    float rear_swath_dist;
+    float vegetation_height_100th;
+    float vegetation_height_75th;
+    float vegetation_height_50th;
+    float vegetation_density;
+    float histogram[30];                  /* Data contained by index:
                                             00 - vegetation height (5th percentile)
                                             01 - vegetation height (25th percentile)
                                             02 - vegetation height (50th percentile)
@@ -37,6 +45,14 @@ POINT_CLOUD_REGISTER_POINT_STRUCT(pcl::RELI,
                                   (float, x, x)
                                   (float, y, y)
                                   (float, z, z)
+                                  (float, flow_direction, flow_direction)
+                                  (float, normal_direction, normal_direction)
+                                  (float, fore_swath_dist, fore_swath_dist)
+                                  (float, rear_swath_dist, rear_swath_dist)
+                                  (float, vegetation_height_100th, vegetation_height_100th)
+                                  (float, vegetation_height_75th, vegetation_height_75th)
+                                  (float, vegetation_height_50th, vegetation_height_50th)
+                                  (float, vegetation_density, vegetation_density)
 )
 
 namespace pcl {
