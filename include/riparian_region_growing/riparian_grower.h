@@ -10,10 +10,10 @@
 #include <dirt_or_leaf/las_point_types.h>
 //#include <dirt_or_leaf/las_filtering.hpp>         included in dirt_or_leaf/ground_tin.hpp
 //#include <dirt_or_leaf/las_triangulation.hpp>     included in dirt_or_leaf/ground_tin.hpp
-#include <dirt_or_leaf/ground_tin.hpp>
+#include <dirt_or_leaf/las_tin.hpp>
 // Instantiate new PCL point types
 #include "riparian_region_growing/reli.h"
-#include "riparian_region_growing/point_channel.h"
+#include <riparian_hydrology_pcl/point_channel.h>
 #include <pcl/impl/instantiate.hpp>
 // Eigen - Linear Math Library
 #include <Eigen/Dense>
@@ -96,7 +96,7 @@ private:
     GCP dem_cloud_;
     std::vector<int> dem_cloud_index_map_;
     GTP dem_tree_;
-    GroundTIN<DEMType> TIN_;
+    LAS_TIN<DEMType> TIN_;
 
 // Data for Vegetation Points
     VCP veg_cloud_;

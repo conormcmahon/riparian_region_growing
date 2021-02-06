@@ -43,7 +43,6 @@ void RiparianGrower<DEMType, VegType, ChannelType>::readChannelNetworkNHDPlus(st
     // Get Flowlines Layer
     flowlines_layer_ = flowlines_dataset_->GetLayerByName(layer_name.c_str());
     // Count and print number of segments in the network
-    OGRFeature *flowline_segment_counter;
     int num_segments = 0;
     for( auto& flowline_segment_counter: flowlines_layer_ )
     {
@@ -239,7 +238,7 @@ void RiparianGrower<DEMType, VegType, ChannelType>::extractVegetationStatistics(
             pt_channel.x = ptTemp.getX();
             pt_channel.y = ptTemp.getY();
             pt_channel.z = 0;
-            pt_channel.z = pt_channel.z = 0-getChannelElevation(pt_grd);
+            pt_channel.z = pt_channel.z = getChannelElevation(pt_grd);
             channel_segment.geometry_cc.points.push_back(pt_channel); 
             
             
@@ -278,7 +277,7 @@ void RiparianGrower<DEMType, VegType, ChannelType>::extractVegetationStatistics(
 template <typename DEMType, typename VegType, typename ChannelType>
 float RiparianGrower<DEMType, VegType, ChannelType>::getChannelElevation(DEMType point)
 {
-    return TIN_.getPointHeight(dem_cloud_, point);
+    return TIN_.interpolateTIN(point);
 }
 
 
